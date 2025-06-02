@@ -100,7 +100,7 @@ model {
   sigma_phi1 ~ normal(0.4, 0.02);
   sigma_phi2 ~ normal(0.4, 0.02);
   
-  theta ~ normal(theta_corr, 0.5);
+  theta ~ normal(0,1);
   
   target += -0.5 * (dot_self(phi1[node1] - phi1[node2]) + dot_self(phi2[node1] - phi2[node2]));
   

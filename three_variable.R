@@ -248,3 +248,120 @@ write.csv(data.frame(correlations_del), "post_icar_data/three_variable/correlati
 write.csv(data.frame(mu1), "post_icar_data/three_variable/mu1.csv", row.names = FALSE)
 write.csv(data.frame(mu2), "post_icar_data/three_variable/mu2.csv", row.names = FALSE)
 write.csv(data.frame(mu3), "post_icar_data/three_variable/mu3.csv", row.names = FALSE)
+
+#Trace Plots
+
+all_pars <- c("lp__","beta0_1", "sigma_1", "phi[1]", "sigma_phi1", "rho[1]", "gamma[1]", "delta[1]")
+
+all_draws <- model1_fit$draws(
+  variables = c("lp__",all_pars),
+  inc_warmup = FALSE,
+  format = "draws_array"
+)
+all_draws_df <- as_draws_df(all_draws)
+write_csv(all_draws_df, glue("{out.dir}/R/all_draws.csv"))
+
+### Test parameters
+p <- bayesplot:::mcmc_trace(all_draws,  
+                            pars = all_pars, 
+                            n_warmup = 0,
+                            facet_args = list(nrow = 2, ncol=4)
+)
+# use this for png
+ggsave(file = glue("{out.dir}/all_pars_traceplot.png"), 
+       plot = p, 
+       h = 8, 
+       w = 16
+)
+
+#Posterior Predictive Check
+
+
+po <- list()
+po$mu3 <- model1_fit$draws(variables = "mu3", 
+                       inc_warmup = FALSE,
+                       format = "draws_df"
+                       )
+po$sigma_3 <- model1_fit$draws(variables = "sigma_3", 
+                       inc_warmup = FALSE,
+                       format = "draws_df"
+                       )
+
+
+po$mu3 <- data.table::melt(as.data.table(po$mu3), 
+                          id.vars = c('.chain','.iteration','.draw')
+                          )
+set(po$mu3, NULL, 'OBS_ID', gsub('mu3\\[([0-9]+)\\]','\\1',as.character(po$mu3$variable)))
+set(po$mu3, NULL, 'OBS_ID', as.integer(po$mu3$OBS_ID))
+setnames(po$mu3, c('value'), c('mu3'))
+set(po$mu3, NULL, 'variable', NULL)
+
+
+po$sigma_3 <- as.data.table(po$sigma_3)
+
+model1_po <- merge(po$mu3, po$sigma_3, by = c('.chain','.iteration','.draw'))
+
+po <- NULL
+gc()
+
+set.seed(42L)
+model1_po[ , post_pred := rnorm( nrow(model1_po), mu3, sigma_3 )]
+
+model1_pp_summary <- 
+  model1_po[,
+            list( summary_value = quantile(post_pred, prob = c(0.025, 0.25, 0.5, 0.75, 0.975)),
+                  summary_name = c('q_lower','iqr_lower','median','iqr_upper','q_upper') 
+                  ),
+            by = 'OBS_ID'
+            ]
+
+model1_pp_summary <- 
+  data.table::dcast(model1_pp_summary,
+                    OBS_ID ~ summary_name, 
+                    value.var = 'summary_value'
+                    )
+
+
+y3_std <- (y3 - mean(y3))/sd(y3)
+
+y3_dt <- data.table(OBS_ID = 1:270, y3 = y3_std)
+
+model1_pp_summary <- merge(model1_pp_summary, y3_dt, by = 'OBS_ID')
+
+model1_pp_summary[, IN_PPI := y3 >= q_lower & y3 <= q_upper]
+model1_pp_summary[, mean( as.numeric( IN_PPI ) )]
+
+library(ggsci)
+
+p <- ggplot(model1_pp_summary, aes(x = OBS_ID)) + 
+  geom_boxplot(aes(
+    group = OBS_ID,
+    ymin = q_lower,
+    lower = iqr_lower,
+    middle = median,
+    upper = iqr_upper,
+    ymax = q_upper
+  ), stat = 'identity') +
+  
+  geom_point(aes(y = y3, colour = IN_PPI)) +
+  
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  scale_y_continuous(labels = scales::percent) +
+  
+  ggsci::scale_color_npg() +  # comment out if you didn’t install ggsci
+  labs(
+    x = 'Location ID',
+    y = 'Standardised Surface Pressure',
+    colour = 'within\n95% posterior\nprediction\ninterval'
+  ) +
+  
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+# Save
+ggsave(
+  file = file.path(out.dir, 'ppc4.png'), 
+  plot = p, 
+  width = 12, 
+  height = 6
+)
